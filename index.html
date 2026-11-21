@@ -430,7 +430,9 @@ function paintEp(){
 }
 /* Podcast volume. Most browsers honor audio.volume; iPhone Safari ignores it, so there the
    podcast is routed through Web Audio (podB + gain node), which needs the show's server to allow CORS. */
-var volWorks=(function(){try{var a=document.createElement("audio");a.volume=.5;return Math.abs(a.volume-.5)<.01}catch(e){return false}})();
+/* iPhone and iPad ignore audio.volume even when reading it back says otherwise, so detect them directly. */
+var isIOS=/iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==="MacIntel"&&navigator.maxTouchPoints>1);
+var volWorks=!isIOS&&(function(){try{var a=document.createElement("audio");a.volume=.5;return Math.abs(a.volume-.5)<.01}catch(e){return false}})();
 var actx=null,podGain=null,primed=false,corsOk={};
 function ensureGraph(){
   if(podGain){if(actx.state!=="running")actx.resume().catch(function(){});return true}
