@@ -433,10 +433,17 @@ function paintEp(){
 /* iPhone and iPad ignore audio.volume even when reading it back says otherwise, so detect them directly. */
 var isIOS=/iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==="MacIntel"&&navigator.maxTouchPoints>1);
 var volWorks=!isIOS&&(function(){try{var a=document.createElement("audio");a.volume=.5;return Math.abs(a.volume-.5)<.01}catch(e){return false}})();
-var actx=null,podGain=null,primed=false,corsOk={};
+var actx=null,podGain=null,primed=false,corsOk={},userPaused=true,lockedOut=false;
+/* Ask iOS 16.4+ to treat page audio as media playback (keeps going on lock and with the silent switch on). */
+try{if(navigator.audioSession)navigator.audioSession.type="playback"}catch(e){}
+function rescue(){ /* iOS stopped the mixer: keep the podcast going on the plain player at full volume */
+  if(pod!==podB||!state.ep||userPaused)return;
+  lockedOut=true;moveTo(podA,state.ep.url,true);paintPodNote();
+}
 function ensureGraph(){
   if(podGain){if(actx.state!=="running")actx.resume().catch(function(){});return true}
   try{var AC=window.AudioContext||window.webkitAudioContext;actx=new AC();
+    actx.onstatechange=function(){if(actx.state!=="running"&&pod===podB&&!userPaused&&document.visibilityState==="hidden")rescue()};
     var src=actx.createMediaElementSource(podB);podGain=actx.createGain();src.connect(podGain);podGain.connect(actx.destination);
     podGain.gain.value=state.podVol/100;actx.resume().catch(function(){});return true}catch(e){podGain=null;return false}
 }
@@ -453,8 +460,8 @@ function probe(url){
   return fetch(url,{mode:"cors",signal:ac?ac.signal:undefined}).then(function(r){if(ac)ac.abort();corsOk[url]=r.ok||r.status===206;return corsOk[url]})
     .catch(function(){corsOk[url]=false;return false});
 }
-function moveTo(el,url){ /* hand playback to the other player at the same spot */
-  var from=pod,t=from.currentTime||0,playing=!from.paused;
+function moveTo(el,url,force){ /* hand playback to the other player at the same spot */
+  var from=pod,t=from.currentTime||0,playing=force||!from.paused;
   pod=el;from.pause();
   el.src=url;el.playbackRate=state.rate;el.load();
   var onMeta=function(){el.removeEventListener("loadedmetadata",onMeta);try{if(t>1)el.currentTime=t}catch(x){}el.playbackRate=state.rate};
@@ -470,7 +477,8 @@ function paintPodNote(){
   $("podPct").textContent=state.podVol+"%";
   var t="";
   if(!volWorks&&state.ep&&state.podVol<100&&pod!==podB){
-    if(corsOk[state.ep.url]===false&&!state.ep.local)t="This show's server blocks volume control on iPhone. Use beat level instead.";
+    if(lockedOut)t="Podcast switched to full volume while the screen was locked. Touch this slider to bring your level back.";
+    else if(corsOk[state.ep.url]===false&&!state.ep.local)t="This show's server blocks volume control on iPhone. Use beat level instead.";
     else if(corsOk[state.ep.url]===undefined&&!state.ep.local)t="Checking this show…";
   }
   $("podNote").textContent=t;
@@ -510,7 +518,9 @@ function bindPod(el){
     var now=Date.now();if(state.ep&&!state.ep.local&&now-lastSave>10000){lastSave=now;save("pos:"+state.ep.url,pod.currentTime)}
   });
   el.addEventListener("play",function(){if(el!==pod)return;if(state.beatOn&&beatUrl&&beatEl.paused)beatEl.play().catch(function(){});paintBar()});
-  el.addEventListener("pause",function(){if(el!==pod)return;if(!pod.ended&&!beatEl.paused)beatEl.pause();paintBar()});
+  el.addEventListener("pause",function(){if(el!==pod)return;
+    if(el===podB&&!userPaused&&document.visibilityState==="hidden"){rescue();return}
+    if(!pod.ended&&!beatEl.paused)beatEl.pause();paintBar()});
   el.addEventListener("error",function(){
     if(el!==pod||!state.ep)return;
     if(el===podB&&el.src.indexOf("blob:")!==0){corsOk[state.ep.url]=false;moveTo(podA,state.ep.url);paintPodNote();return}
@@ -522,7 +532,7 @@ $("podVol").value=state.podVol;applyPodVol();
 $("podVol").addEventListener("input",function(){
   state.podVol=+this.value;save("podVol",state.podVol);
   if(!volWorks&&state.podVol<100){primeB();ensureGraph()}
-  applyPodVol();routeIfNeeded();paintPodNote();
+  lockedOut=false;applyPodVol();routeIfNeeded();paintPodNote();
 });
 $("seek").addEventListener("input",function(){seeking=true;$("tCur").textContent=fmt(+this.value)});
 $("seek").addEventListener("change",function(){pod.currentTime=+this.value;seeking=false});
@@ -534,15 +544,30 @@ $("rate").addEventListener("click",function(){var r=[1,1.1,1.25,1.5],i=r.indexOf
 var wake=null;
 function wakeOn(){try{if(navigator.wakeLock&&!wake)navigator.wakeLock.request("screen").then(function(w){wake=w;w.addEventListener("release",function(){wake=null})}).catch(function(){})}catch(e){}}
 function wakeOff(){try{if(wake)wake.release()}catch(e){}wake=null}
-document.addEventListener("visibilitychange",function(){if(document.visibilityState==="visible"&&isPlaying())wakeOn()});
+document.addEventListener("visibilitychange",function(){
+  if(document.visibilityState==="visible"){
+    if(isPlaying())wakeOn();
+    /* back from lock: try to restore the podcast level */
+    if(lockedOut&&podGain&&state.ep&&state.podVol<100&&pod===podA&&!podA.paused){
+      actx.resume().then(function(){if(actx.state==="running"&&lockedOut&&pod===podA){lockedOut=false;moveTo(podB,state.ep.url);paintPodNote()}}).catch(function(){});
+    }
+    return;
+  }
+  /* screen locked: if the mixer stalls, hand the podcast to the plain player */
+  if(pod===podB&&!userPaused&&!podB.paused){
+    var t0=podB.currentTime;
+    setTimeout(function(){if(pod===podB&&!userPaused&&(podB.paused||actx.state!=="running"||podB.currentTime-t0<.5))rescue()},1500);
+  }
+});
 function isPlaying(){return (pod.src&&!pod.paused)||!beatEl.paused}
 function playAll(){
+  userPaused=false;
   if(!volWorks&&state.podVol<100){primeB();ensureGraph()}
   if(pod.src)pod.play().catch(function(){setStatus("Tap play again to start the episode.")});
   if(state.beatOn){if(beatUrl)beatEl.play().catch(function(){});else wantPlay=true}
   wakeOn();paintBar();
 }
-function pauseAll(){podA.pause();podB.pause();beatEl.pause();wantPlay=false;wakeOff();paintBar()}
+function pauseAll(){userPaused=true;podA.pause();podB.pause();beatEl.pause();wantPlay=false;wakeOff();paintBar()}
 $("playAll").addEventListener("click",function(){isPlaying()?pauseAll():playAll()});
 beatEl.addEventListener("play",paintBar);beatEl.addEventListener("pause",paintBar);
 function paintBar(){
