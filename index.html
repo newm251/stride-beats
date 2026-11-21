@@ -169,8 +169,8 @@ form.search button{height:46px;padding:0 16px;border-radius:10px;background:var(
       <input type="range" id="bpmSlider" min="120" max="190" step="1" value="138" aria-label="Beat tempo in steps per minute">
     </div>
     <div>
-      <span class="label">Beat level</span>
-      <input type="range" id="vol" min="0" max="100" step="1" value="45" aria-label="Beat volume">
+      <div class="row" style="justify-content:space-between"><span class="label">Beat level</span><span class="label num" id="volPct">45%</span></div>
+      <input type="range" id="vol" min="0" max="200" step="1" value="45" aria-label="Beat volume">
     </div>
     <div class="row">
       <button class="toggle" id="beatOn" aria-pressed="true">Beat on</button>
@@ -329,10 +329,13 @@ function wavUrl(r,vol){
   function w(o,s){for(var i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i))}
   w(0,"RIFF");v.setUint32(4,36+n*2,true);w(8,"WAVE");w(12,"fmt ");v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);
   v.setUint32(24,SR,true);v.setUint32(28,SR*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);w(36,"data");v.setUint32(40,n*2,true);
-  for(var i=0,o=44;i<n;i++,o+=2){var s=d[i]*vol;s=s>1?1:s<-1?-1:s;v.setInt16(o,s<0?s*32768:s*32767,true)}
+  /* Above 100%: soft-limit so peaks stay put and the body of each hit gets louder. */
+  var boost=vol>1, norm=boost?.95/Math.tanh(.95*vol):1;
+  for(var i=0,o=44;i<n;i++,o+=2){var s=boost?Math.tanh(d[i]*vol)*norm:d[i]*vol;s=s>1?1:s<-1?-1:s;v.setInt16(o,s<0?s*32768:s*32767,true)}
   return URL.createObjectURL(new Blob([buf],{type:"audio/wav"}));
 }
-function volGain(){return Math.pow(state.vol/100,1.6)}
+function volGain(){var x=state.vol;return x<=100?Math.pow(x/100,1.6):1+(x-100)/100*3}
+function paintVol(){$("volPct").textContent=state.vol+"%"}
 
 /* ---------- Beat loading ---------- */
 var beatUrl=null, beatDur=0, beatKey=null, wantPlay=false, renderSeq=0;
@@ -480,8 +483,8 @@ $("bpmDown").addEventListener("click",function(){setBpm(curBpm()-2)});
 $("bpmUp").addEventListener("click",function(){setBpm(curBpm()+2)});
 $("bpmSlider").addEventListener("input",function(){setBpm(+this.value)});
 $("bpmReset").addEventListener("click",function(){setBpm(curBeat().bpm)});
-$("vol").value=state.vol;
-$("vol").addEventListener("input",function(){state.vol=+this.value;save("vol",state.vol);reVolume()});
+$("vol").value=state.vol;paintVol();
+$("vol").addEventListener("input",function(){state.vol=+this.value;save("vol",state.vol);paintVol();reVolume()});
 $("beatOn").addEventListener("click",function(){
   state.beatOn=!state.beatOn;save("beatOn",state.beatOn);
   if(!state.beatOn)beatEl.pause();else if(pod.src&&!pod.paused&&beatUrl)beatEl.play().catch(function(){});
