@@ -144,6 +144,11 @@ form.search button{height:46px;padding:0 16px;border-radius:10px;background:var(
       <input type="range" id="seek" min="0" max="100" value="0" step="1" aria-label="Episode position" disabled>
       <div class="times num"><span id="tCur">0:00</span><span id="tDur">0:00</span></div>
     </div>
+    <div>
+      <div class="row" style="justify-content:space-between"><span class="label">Podcast level</span><span class="label num" id="podPct">100%</span></div>
+      <input type="range" id="podVol" min="0" max="100" step="1" value="100" aria-label="Podcast volume">
+      <span class="status" id="podNote"></span>
+    </div>
     <div class="row">
       <button class="ctl" id="back15" disabled aria-label="Back 15 seconds">−15</button>
       <button class="ctl" id="fwd30" disabled aria-label="Forward 30 seconds">+30</button>
@@ -209,6 +214,7 @@ form.search button{height:46px;padding:0 16px;border-radius:10px;background:var(
 </div>
 
 <audio id="pod" preload="metadata" playsinline></audio>
+<audio id="pod2" preload="metadata" playsinline crossorigin="anonymous"></audio>
 <audio id="beat" loop preload="auto" playsinline></audio>
 
 <script>
@@ -269,13 +275,14 @@ function load(k,f){try{var v=localStorage.getItem("sb:"+k);return v==null?f:JSON
 function save(k,v){try{localStorage.setItem("sb:"+k,JSON.stringify(v))}catch(e){}}
 
 var $ = function(id){return document.getElementById(id)};
-var pod=$("pod"), beatEl=$("beat");
+var podA=$("pod"), podB=$("pod2"), pod=podA, beatEl=$("beat");
 var state = {
   beatId: load("beat","steady"),
   bpmOver: load("bpmOver",{}),
   vol: load("vol",45),
   beatOn: load("beatOn",true),
   rate: load("rate",1),
+  podVol: load("podVol",100),
   recent: load("recent",[]),
   ep: load("ep",null)
 };
@@ -421,15 +428,65 @@ function paintEp(){
   $("rate").textContent=state.rate+"×";
   paintBar();
 }
+/* Podcast volume. Most browsers honor audio.volume; iPhone Safari ignores it, so there the
+   podcast is routed through Web Audio (podB + gain node), which needs the show's server to allow CORS. */
+var volWorks=(function(){try{var a=document.createElement("audio");a.volume=.5;return Math.abs(a.volume-.5)<.01}catch(e){return false}})();
+var actx=null,podGain=null,primed=false,corsOk={};
+function ensureGraph(){
+  if(podGain){if(actx.state!=="running")actx.resume().catch(function(){});return true}
+  try{var AC=window.AudioContext||window.webkitAudioContext;actx=new AC();
+    var src=actx.createMediaElementSource(podB);podGain=actx.createGain();src.connect(podGain);podGain.connect(actx.destination);
+    podGain.gain.value=state.podVol/100;actx.resume().catch(function(){});return true}catch(e){podGain=null;return false}
+}
+function primeB(){ /* unlock the second player inside a tap so it may play later */
+  if(primed||volWorks||pod===podB)return;primed=true;
+  podB.src=silentUrl();podB.play().then(function(){if(pod!==podB)podB.pause()}).catch(function(){});
+}
+function silentUrl(){var r={data:new Float32Array(SR/10),dur:.1};return wavUrl(r,1)}
+function applyPodVol(){var g=state.podVol/100;if(volWorks){podA.volume=g;podB.volume=g}if(podGain)podGain.gain.value=g}
+function routable(e){return e&&(e.local||corsOk[e.url]===true)}
+function probe(url){
+  if(corsOk[url]!==undefined)return Promise.resolve(corsOk[url]);
+  var ac=window.AbortController?new AbortController():null;
+  return fetch(url,{mode:"cors",signal:ac?ac.signal:undefined}).then(function(r){if(ac)ac.abort();corsOk[url]=r.ok||r.status===206;return corsOk[url]})
+    .catch(function(){corsOk[url]=false;return false});
+}
+function moveTo(el,url){ /* hand playback to the other player at the same spot */
+  var from=pod,t=from.currentTime||0,playing=!from.paused;
+  pod=el;from.pause();
+  el.src=url;el.playbackRate=state.rate;el.load();
+  var onMeta=function(){el.removeEventListener("loadedmetadata",onMeta);try{if(t>1)el.currentTime=t}catch(x){}el.playbackRate=state.rate};
+  el.addEventListener("loadedmetadata",onMeta);
+  if(playing)el.play().catch(function(){setStatus("Tap play to keep going.")});
+  paintBar();
+}
+function routeIfNeeded(){
+  if(volWorks||!state.ep||pod===podB||state.podVol>=100||!podGain)return;
+  if(routable(state.ep))moveTo(podB,state.ep.url);
+}
+function paintPodNote(){
+  $("podPct").textContent=state.podVol+"%";
+  var t="";
+  if(!volWorks&&state.ep&&state.podVol<100&&pod!==podB){
+    if(corsOk[state.ep.url]===false&&!state.ep.local)t="This show's server blocks volume control on iPhone. Use beat level instead.";
+    else if(corsOk[state.ep.url]===undefined&&!state.ep.local)t="Checking this show…";
+  }
+  $("podNote").textContent=t;
+}
 function loadEpisode(e,autoplay){
   state.ep=e;
   if(!e.local)save("ep",e);
-  pod.src=e.url;pod.playbackRate=state.rate;pod.load();
+  var el=(!volWorks&&podGain&&state.podVol<100&&routable(e))?podB:podA;
+  if(pod!==el){var o=pod;pod=el;o.pause()}
+  el.src=e.url;el.playbackRate=state.rate;el.load();
   var pos=e.local?0:load("pos:"+e.url,0);
-  var onMeta=function(){pod.removeEventListener("loadedmetadata",onMeta);if(pos>5){try{pod.currentTime=pos}catch(x){}}pod.playbackRate=state.rate};
-  pod.addEventListener("loadedmetadata",onMeta);
-  paintEp();setMedia();
+  var onMeta=function(){el.removeEventListener("loadedmetadata",onMeta);if(pos>5){try{el.currentTime=pos}catch(x){}}el.playbackRate=state.rate};
+  el.addEventListener("loadedmetadata",onMeta);
+  paintEp();setMedia();paintPodNote();
   if(autoplay)playAll();
+  if(!volWorks&&!e.local&&corsOk[e.url]===undefined){
+    probe(e.url).then(function(){if(state.ep===e){routeIfNeeded();paintPodNote()}});
+  }
 }
 function setMedia(){
   if(!("mediaSession" in navigator)||!state.ep)return;
@@ -443,14 +500,28 @@ function setMedia(){
 }
 function skip(n){if(!pod.src)return;pod.currentTime=Math.max(0,Math.min((pod.duration||1e9),pod.currentTime+n))}
 var seeking=false,lastSave=0;
-pod.addEventListener("timeupdate",function(){
-  if(!seeking&&pod.duration){$("seek").max=Math.floor(pod.duration);$("seek").value=Math.floor(pod.currentTime)}
-  $("tCur").textContent=fmt(pod.currentTime);$("tDur").textContent=fmt(pod.duration);
-  var now=Date.now();if(state.ep&&!state.ep.local&&now-lastSave>10000){lastSave=now;save("pos:"+state.ep.url,pod.currentTime)}
+function bindPod(el){
+  el.addEventListener("timeupdate",function(){
+    if(el!==pod)return;
+    if(!seeking&&pod.duration){$("seek").max=Math.floor(pod.duration);$("seek").value=Math.floor(pod.currentTime)}
+    $("tCur").textContent=fmt(pod.currentTime);$("tDur").textContent=fmt(pod.duration);
+    var now=Date.now();if(state.ep&&!state.ep.local&&now-lastSave>10000){lastSave=now;save("pos:"+state.ep.url,pod.currentTime)}
+  });
+  el.addEventListener("play",function(){if(el!==pod)return;if(state.beatOn&&beatUrl&&beatEl.paused)beatEl.play().catch(function(){});paintBar()});
+  el.addEventListener("pause",function(){if(el!==pod)return;if(!pod.ended&&!beatEl.paused)beatEl.pause();paintBar()});
+  el.addEventListener("error",function(){
+    if(el!==pod||!state.ep)return;
+    if(el===podB&&el.src.indexOf("blob:")!==0){corsOk[state.ep.url]=false;moveTo(podA,state.ep.url);paintPodNote();return}
+    setStatus("That episode would not load. Try another one.");
+  });
+}
+bindPod(podA);bindPod(podB);
+$("podVol").value=state.podVol;applyPodVol();
+$("podVol").addEventListener("input",function(){
+  state.podVol=+this.value;save("podVol",state.podVol);
+  if(!volWorks&&state.podVol<100){primeB();ensureGraph()}
+  applyPodVol();routeIfNeeded();paintPodNote();
 });
-pod.addEventListener("play",function(){if(state.beatOn&&beatUrl&&beatEl.paused)beatEl.play().catch(function(){});paintBar()});
-pod.addEventListener("pause",function(){if(!pod.ended&&!beatEl.paused)beatEl.pause();paintBar()});
-pod.addEventListener("error",function(){if(state.ep)setStatus("That episode would not load. Try another one.")});
 $("seek").addEventListener("input",function(){seeking=true;$("tCur").textContent=fmt(+this.value)});
 $("seek").addEventListener("change",function(){pod.currentTime=+this.value;seeking=false});
 $("back15").addEventListener("click",function(){skip(-15)});
@@ -464,11 +535,12 @@ function wakeOff(){try{if(wake)wake.release()}catch(e){}wake=null}
 document.addEventListener("visibilitychange",function(){if(document.visibilityState==="visible"&&isPlaying())wakeOn()});
 function isPlaying(){return (pod.src&&!pod.paused)||!beatEl.paused}
 function playAll(){
+  if(!volWorks&&state.podVol<100){primeB();ensureGraph()}
   if(pod.src)pod.play().catch(function(){setStatus("Tap play again to start the episode.")});
   if(state.beatOn){if(beatUrl)beatEl.play().catch(function(){});else wantPlay=true}
   wakeOn();paintBar();
 }
-function pauseAll(){pod.pause();beatEl.pause();wantPlay=false;wakeOff();paintBar()}
+function pauseAll(){podA.pause();podB.pause();beatEl.pause();wantPlay=false;wakeOff();paintBar()}
 $("playAll").addEventListener("click",function(){isPlaying()?pauseAll():playAll()});
 beatEl.addEventListener("play",paintBar);beatEl.addEventListener("pause",paintBar);
 function paintBar(){
