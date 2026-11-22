@@ -182,6 +182,7 @@ form.search button{height:46px;padding:0 16px;border-radius:10px;background:var(
       <span class="status" id="podNote"></span>
     </div>
     <div class="row">
+      <button class="ctl" id="podPlay" disabled aria-label="Play or pause the podcast only">Play</button>
       <button class="ctl" id="back15" disabled aria-label="Back 15 seconds">−15</button>
       <button class="ctl" id="fwd30" disabled aria-label="Forward 30 seconds">+30</button>
       <span class="spacer"></span>
@@ -520,7 +521,7 @@ function paintEp(){
   $("epShow").textContent=has?e.show:"No episode loaded";
   $("epTitle").textContent=has?e.title:"Search for a show below, or run to the beat alone.";
   if(has&&e.art){$("epArt").src=e.art;$("epArt").hidden=false;$("epPh").hidden=true}else{$("epArt").hidden=true;$("epPh").hidden=false}
-  ["seek","back15","fwd30","rate"].forEach(function(id){$(id).disabled=!has});
+  ["seek","podPlay","back15","fwd30","rate"].forEach(function(id){$(id).disabled=!has});
   $("rate").textContent=state.rate+"×";
   paintBar();
 }
@@ -632,6 +633,7 @@ function bindPod(el){
   el.addEventListener("play",function(){if(el!==pod)return;if(state.beatOn&&beatUrl&&beatEl.paused)beatEl.play().catch(function(){});paintBar()});
   el.addEventListener("pause",function(){if(el!==pod)return;
     if(el===podB&&!userPaused&&document.visibilityState==="hidden"){rescue();return}
+    if(podOnly){podOnly=false;paintBar();return}  /* podcast paused on its own: beat keeps going */
     if(!pod.ended&&!beatEl.paused)beatEl.pause();paintBar()});
   el.addEventListener("ended",function(){
     if(el!==pod||!state.ep)return;
@@ -649,8 +651,20 @@ function bindPod(el){
 }
 bindPod(podA);bindPod(podB);
 $("podVol").value=state.podVol;applyPodVol();
+var podOnly=false;
+function podWanted(){return !state.mix&&state.podVol>0}
+function podPause(){if(!pod.paused){podOnly=true;pod.pause()}}
+function podPlay(){
+  userPaused=false;
+  if(!volWorks&&state.podVol<100){primeB();ensureGraph()}
+  pod.play().catch(function(){setStatus("Tap play again to start the episode.")});wakeOn();
+}
+$("podPlay").addEventListener("click",function(){if(!pod.src)return;pod.paused?podPlay():podPause();});
 $("podVol").addEventListener("input",function(){
+  var was=state.podVol;
   state.podVol=+this.value;save("podVol",state.podVol);
+  if(state.podVol===0)podPause();  /* 0% means off, even where iPhone can't lower the volume */
+  else if(was===0&&!beatEl.paused&&!state.mix&&pod.src)podPlay();
   if(!volWorks&&state.podVol<100){primeB();ensureGraph()}
   lockedOut=false;applyPodVol();routeIfNeeded();paintPodNote();
 });
@@ -683,7 +697,7 @@ function isPlaying(){return (pod.src&&!pod.paused)||!beatEl.paused}
 function playAll(){
   userPaused=false;
   if(!volWorks&&state.podVol<100){primeB();ensureGraph()}
-  if(pod.src)pod.play().catch(function(){setStatus("Tap play again to start the episode.")});
+  if(pod.src&&podWanted())pod.play().catch(function(){setStatus("Tap play again to start the episode.")});
   if(state.beatOn){if(beatUrl)beatEl.play().catch(function(){});else wantPlay=true}
   wakeOn();paintBar();
 }
@@ -693,8 +707,10 @@ beatEl.addEventListener("play",paintBar);beatEl.addEventListener("pause",paintBa
 function paintBar(){
   var p=isPlaying();$("icPlay").hidden=p;$("icPause").hidden=!p;$("playAll").setAttribute("aria-label",p?"Pause":"Play");
   var b=curBeat();
-  $("barL1").textContent=state.ep?state.ep.title:(p?"Running to the beat":"Ready");
-  $("barL2").textContent=(state.beatOn?b.name+" · "+curBpm()+" spm":"Beat off")+(state.ep?" · "+state.ep.show:"");
+  var podOn=pod.src&&!pod.paused;
+  $("podPlay").textContent=podOn?"Pause":"Play";
+  $("barL1").textContent=podOn?state.ep.title:(p?(state.mix?"Beat over your other app":"Running to the beat"):(state.ep?state.ep.title:"Ready"));
+  $("barL2").textContent=(state.beatOn?b.name+" · "+curBpm()+" spm":"Beat off")+(podOn?" · "+state.ep.show:(state.mix?" · mixing with other apps":""));
 }
 
 /* ---------- Beat controls ---------- */
