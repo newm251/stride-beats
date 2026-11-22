@@ -116,6 +116,9 @@ form.search button{height:46px;padding:0 16px;border-radius:10px;background:var(
 .mini{flex:none;min-width:64px;height:36px;padding:0 12px;border-radius:18px;border:1px solid var(--line);font:600 13px var(--font-body);color:var(--accent)}
 .mini[disabled]{color:var(--muted)}
 .mini.num{font-family:var(--font-num);font-size:12px}
+.acts{display:flex;gap:6px;flex:none}
+.acts .mini{min-width:0}
+.tag{color:var(--accent);font-weight:600}
 
 /* Bottom bar */
 .bar{position:fixed;left:0;right:0;bottom:0;background:var(--surface);border-top:1px solid var(--line);
@@ -193,6 +196,7 @@ form.search button{height:46px;padding:0 16px;border-radius:10px;background:var(
   <section class="card" aria-label="Saved for offline">
     <div class="row" style="justify-content:space-between"><span class="label">Saved for offline</span><span class="label num" id="savedTotal"></span></div>
     <div class="list" id="savedList"></div>
+    <button class="toggle" id="autoNext" aria-pressed="true" hidden>Play in a row</button>
     <p class="status" id="savedEmpty">Tap Save next to any episode to keep it on this phone for runs without signal. Keep the app open until it finishes.</p>
   </section>
 
@@ -294,6 +298,7 @@ var state = {
   beatOn: load("beatOn",true),
   rate: load("rate",1),
   podVol: load("podVol",100),
+  autoNext: load("autoNext",true),
   recent: load("recent",[]),
   ep: load("ep",null)
 };
@@ -505,7 +510,7 @@ function loadEpisode(e,autoplay){
   var pos=e.local?0:load("pos:"+e.url,0);
   var onMeta=function(){el.removeEventListener("loadedmetadata",onMeta);if(pos>5){try{el.currentTime=pos}catch(x){}}el.playbackRate=state.rate};
   el.addEventListener("loadedmetadata",onMeta);
-  paintEp();setMedia();paintPodNote();
+  paintEp();setMedia();paintPodNote();paintSaved();
   if(autoplay)playAll();
   if(!volWorks&&!e.local&&!savedFor(e.url)&&corsOk[e.url]===undefined){
     probe(e.url).then(function(){if(state.ep===e){routeIfNeeded();paintPodNote()}});
@@ -534,6 +539,13 @@ function bindPod(el){
   el.addEventListener("pause",function(){if(el!==pod)return;
     if(el===podB&&!userPaused&&document.visibilityState==="hidden"){rescue();return}
     if(!pod.ended&&!beatEl.paused)beatEl.pause();paintBar()});
+  el.addEventListener("ended",function(){
+    if(el!==pod||!state.ep)return;
+    save("pos:"+state.ep.url,0);
+    var nx=nextSaved();
+    if(state.autoNext&&nx){loadEpisode({url:nx.url,title:nx.title,show:nx.show,art:nx.art},true)}
+    else paintBar();
+  });
   el.addEventListener("error",function(){
     if(el!==pod||!state.ep)return;
     if(el===podB&&!isLocalSrc(el.src)){corsOk[state.ep.url]=false;moveTo(podA,curSrc());paintPodNote();return}
@@ -675,7 +687,7 @@ function saveEpisode(ep,onProgress){
       return c.put(offlineUrl(id),new Response(blob,{headers:{"Content-Type":blob.type||"audio/mpeg","Content-Length":String(blob.size)}}));
     }).then(function(){
       saved=saved.filter(function(s){return s.url!==ep.url});
-      saved.unshift({id:id,url:ep.url,title:ep.title,show:ep.show,art:ep.art,size:blob.size,at:Date.now()});
+      saved.push({id:id,url:ep.url,title:ep.title,show:ep.show,art:ep.art,size:blob.size,at:Date.now()});
       save("saved",saved);
     });
   }).then(function(){delete dl[ep.url];onProgress();paintSaved()})
@@ -693,22 +705,38 @@ function deleteSaved(sv){
     paintSaved();
   });
 }
+function nextSaved(){ /* the saved episode after the current one, or the first one if the current isn't saved */
+  if(!saved.length)return null;
+  var cur=state.ep?state.ep.url:null,i=-1;
+  for(var k=0;k<saved.length;k++)if(saved[k].url===cur)i=k;
+  var n=saved[i+1]||null;return n&&n.url!==cur?n:null;
+}
+$("autoNext").addEventListener("click",function(){state.autoNext=!state.autoNext;save("autoNext",state.autoNext);paintSaved()});
 function paintSaved(){
   var l=$("savedList");l.textContent="";
   var total=0;
   saved.forEach(function(sv){
     total+=sv.size||0;
-    var del=document.createElement("button");del.className="mini";del.textContent="Delete";
+    var acts=document.createElement("span");acts.className="acts";
+    var idx=saved.indexOf(sv);
+    if(idx>0){var up=document.createElement("button");up.className="mini";up.textContent="↑";up.setAttribute("aria-label","Move up");
+      up.addEventListener("click",function(){saved.splice(idx,1);saved.splice(idx-1,0,sv);save("saved",saved);paintSaved()});acts.appendChild(up)}
+    var del=document.createElement("button");del.className="mini";del.textContent="Delete";acts.appendChild(del);
     var armed=false;
     del.addEventListener("click",function(){
       if(!armed){armed=true;del.textContent="Sure?";setTimeout(function(){armed=false;del.textContent="Delete"},3000);return}
       deleteSaved(sv);
     });
-    l.appendChild(row(sv.art,sv.title,sv.show+" · "+mb(sv.size||0),function(){
+    var nx=nextSaved(),tag=state.ep&&state.ep.url===sv.url?"Playing · ":(state.autoNext&&nx===sv?"Up next · ":"");
+    var r=row(sv.art,sv.title,sv.show+" · "+mb(sv.size||0),function(){
       loadEpisode({url:sv.url,title:sv.title,show:sv.show,art:sv.art},true);window.scrollTo({top:0,behavior:"smooth"});
-    },del));
+    },acts);
+    if(tag){var tg=document.createElement("span");tg.className="tag";tg.textContent=tag;var sub=r.querySelector(".s");sub.insertBefore(tg,sub.firstChild)}
+    l.appendChild(r);
   });
   $("savedEmpty").hidden=saved.length>0;
+  var an=$("autoNext");an.hidden=saved.length<2;an.setAttribute("aria-pressed",state.autoNext?"true":"false");
+  an.textContent=state.autoNext?"Plays the next saved episode when one ends":"Stops after each episode";
   $("savedTotal").textContent=saved.length?mb(total)+" on phone":"";
 }
 function msg(t){var r=$("results");r.textContent="";var p=document.createElement("p");p.className="status";p.textContent=t;r.appendChild(p)}
