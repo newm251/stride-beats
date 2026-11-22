@@ -111,6 +111,11 @@ form.search button{height:46px;padding:0 16px;border-radius:10px;background:var(
 .filepick input{position:absolute;opacity:0;width:1px;height:1px}
 .back{align-self:flex-start;font-size:13px;font-weight:600;color:var(--accent);padding:6px 0}
 .foot{font-size:12px;color:var(--muted);line-height:1.5}
+.itemrow{display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line);min-width:0}
+.itemrow .item{border-bottom:0;flex:1}
+.mini{flex:none;min-width:64px;height:36px;padding:0 12px;border-radius:18px;border:1px solid var(--line);font:600 13px var(--font-body);color:var(--accent)}
+.mini[disabled]{color:var(--muted)}
+.mini.num{font-family:var(--font-num);font-size:12px}
 
 /* Bottom bar */
 .bar{position:fixed;left:0;right:0;bottom:0;background:var(--surface);border-top:1px solid var(--line);
@@ -184,6 +189,12 @@ form.search button{height:46px;padding:0 16px;border-radius:10px;background:var(
   </section>
 
   <section id="zones" style="display:flex;flex-direction:column;gap:20px" aria-label="Beats by training zone"></section>
+
+  <section class="card" aria-label="Saved for offline">
+    <div class="row" style="justify-content:space-between"><span class="label">Saved for offline</span><span class="label num" id="savedTotal"></span></div>
+    <div class="list" id="savedList"></div>
+    <p class="status" id="savedEmpty">Tap Save next to any episode to keep it on this phone for runs without signal. Keep the app open until it finishes.</p>
+  </section>
 
   <section class="card" aria-label="Find a podcast">
     <span class="label">Find a podcast</span>
@@ -438,7 +449,7 @@ var actx=null,podGain=null,primed=false,corsOk={},userPaused=true,lockedOut=fals
 try{if(navigator.audioSession)navigator.audioSession.type="playback"}catch(e){}
 function rescue(){ /* iOS stopped the mixer: keep the podcast going on the plain player at full volume */
   if(pod!==podB||!state.ep||userPaused)return;
-  lockedOut=true;moveTo(podA,state.ep.url,true);paintPodNote();
+  lockedOut=true;moveTo(podA,curSrc(),true);paintPodNote();
 }
 function ensureGraph(){
   if(podGain){if(actx.state!=="running")actx.resume().catch(function(){});return true}
@@ -453,7 +464,9 @@ function primeB(){ /* unlock the second player inside a tap so it may play later
 }
 function silentUrl(){var r={data:new Float32Array(SR/10),dur:.1};return wavUrl(r,1)}
 function applyPodVol(){var g=state.podVol/100;if(volWorks){podA.volume=g;podB.volume=g}if(podGain)podGain.gain.value=g}
-function routable(e){return e&&(e.local||corsOk[e.url]===true)}
+function routable(e){return e&&(e.local||!!savedFor(e.url)||corsOk[e.url]===true)}
+function curSrc(){return pod.currentSrc||pod.src}
+function isLocalSrc(s){return s.indexOf("blob:")===0||s.indexOf(location.origin)===0}
 function probe(url){
   if(corsOk[url]!==undefined)return Promise.resolve(corsOk[url]);
   var ac=window.AbortController?new AbortController():null;
@@ -471,7 +484,7 @@ function moveTo(el,url,force){ /* hand playback to the other player at the same 
 }
 function routeIfNeeded(){
   if(volWorks||!state.ep||pod===podB||state.podVol>=100||!podGain)return;
-  if(routable(state.ep))moveTo(podB,state.ep.url);
+  if(routable(state.ep))moveTo(podB,curSrc());
 }
 function paintPodNote(){
   $("podPct").textContent=state.podVol+"%";
@@ -488,13 +501,13 @@ function loadEpisode(e,autoplay){
   if(!e.local)save("ep",e);
   var el=(!volWorks&&podGain&&state.podVol<100&&routable(e))?podB:podA;
   if(pod!==el){var o=pod;pod=el;o.pause()}
-  el.src=e.url;el.playbackRate=state.rate;el.load();
+  el.src=srcFor(e);el.playbackRate=state.rate;el.load();
   var pos=e.local?0:load("pos:"+e.url,0);
   var onMeta=function(){el.removeEventListener("loadedmetadata",onMeta);if(pos>5){try{el.currentTime=pos}catch(x){}}el.playbackRate=state.rate};
   el.addEventListener("loadedmetadata",onMeta);
   paintEp();setMedia();paintPodNote();
   if(autoplay)playAll();
-  if(!volWorks&&!e.local&&corsOk[e.url]===undefined){
+  if(!volWorks&&!e.local&&!savedFor(e.url)&&corsOk[e.url]===undefined){
     probe(e.url).then(function(){if(state.ep===e){routeIfNeeded();paintPodNote()}});
   }
 }
@@ -523,7 +536,7 @@ function bindPod(el){
     if(!pod.ended&&!beatEl.paused)beatEl.pause();paintBar()});
   el.addEventListener("error",function(){
     if(el!==pod||!state.ep)return;
-    if(el===podB&&el.src.indexOf("blob:")!==0){corsOk[state.ep.url]=false;moveTo(podA,state.ep.url);paintPodNote();return}
+    if(el===podB&&!isLocalSrc(el.src)){corsOk[state.ep.url]=false;moveTo(podA,curSrc());paintPodNote();return}
     setStatus("That episode would not load. Try another one.");
   });
 }
@@ -549,7 +562,7 @@ document.addEventListener("visibilitychange",function(){
     if(isPlaying())wakeOn();
     /* back from lock: try to restore the podcast level */
     if(lockedOut&&podGain&&state.ep&&state.podVol<100&&pod===podA&&!podA.paused){
-      actx.resume().then(function(){if(actx.state==="running"&&lockedOut&&pod===podA){lockedOut=false;moveTo(podB,state.ep.url);paintPodNote()}}).catch(function(){});
+      actx.resume().then(function(){if(actx.state==="running"&&lockedOut&&pod===podA){lockedOut=false;moveTo(podB,curSrc());paintPodNote()}}).catch(function(){});
     }
     return;
   }
@@ -601,14 +614,102 @@ function jsonp(url){
     s.src=url+"&callback="+cb;document.head.appendChild(s);
   });
 }
-function row(img,t,s,onTap){
+function row(img,t,s,onTap,action){
   var b=document.createElement("button");b.className="item";
   var i=document.createElement("img");i.alt="";i.loading="lazy";if(img)i.src=img;
+  i.addEventListener("error",function(){i.removeAttribute("src")});
   var m=document.createElement("span");m.className="m";
   var tt=document.createElement("span");tt.className="t";tt.textContent=t;
   var ss=document.createElement("span");ss.className="s";ss.textContent=s;
   m.appendChild(tt);m.appendChild(ss);b.appendChild(i);b.appendChild(m);
-  b.addEventListener("click",onTap);return b;
+  b.addEventListener("click",onTap);
+  if(!action)return b;
+  var w=document.createElement("div");w.className="itemrow";w.appendChild(b);w.appendChild(action);return w;
+}
+
+/* ---------- Saved for offline ---------- */
+var EPS="sb-episodes", saved=load("saved",[]), dl={};
+function savedFor(url){for(var i=0;i<saved.length;i++)if(saved[i].url===url)return saved[i];return null}
+function offlineUrl(id){return new URL("offline/"+id,location.href).href}
+function srcFor(e){
+  if(e.local)return e.url;
+  var sv=savedFor(e.url);
+  if(sv&&navigator.serviceWorker&&navigator.serviceWorker.controller)return offlineUrl(sv.id);
+  return e.url;
+}
+function mb(n){return n<1e6?"<1 MB":n>=1e9?(n/1e9).toFixed(1)+" GB":Math.round(n/1e6)+" MB"}
+function hashId(s){var h=5381;for(var i=0;i<s.length;i++)h=((h<<5)+h+s.charCodeAt(i))>>>0;return h.toString(36)+s.length.toString(36)}
+function saveButton(ep){
+  var b=document.createElement("button");b.className="mini";
+  function paint(){
+    var d=dl[ep.url];
+    if(savedFor(ep.url)){b.textContent="Saved";b.disabled=true;b.classList.remove("num")}
+    else if(d){b.textContent=d.total?Math.floor(d.got/d.total*100)+"%":mb(d.got);b.disabled=true;b.classList.add("num")}
+    else{b.textContent="Save";b.disabled=false;b.classList.remove("num")}
+  }
+  b.addEventListener("click",function(ev){ev.stopPropagation();saveEpisode(ep,paint)});
+  paint();return b;
+}
+function saveEpisode(ep,onProgress){
+  if(!("caches" in window)){setStatus("This browser can't save episodes.");return}
+  if(dl[ep.url]||savedFor(ep.url))return;
+  try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist()}catch(e){}
+  dl[ep.url]={got:0,total:0};onProgress();
+  fetch(ep.url,{mode:"cors"}).then(function(r){
+    if(!r.ok&&r.status!==206)throw new Error("http");
+    corsOk[ep.url]=true;
+    var type=r.headers.get("Content-Type")||"audio/mpeg";
+    dl[ep.url].total=+r.headers.get("Content-Length")||0;
+    if(!r.body||!r.body.getReader)return r.blob();
+    var reader=r.body.getReader(),chunks=[],last=0;
+    function pump(){return reader.read().then(function(x){
+      if(x.done)return new Blob(chunks,{type:type});
+      chunks.push(x.value);dl[ep.url].got+=x.value.length;
+      var now=Date.now();if(now-last>300){last=now;onProgress()}
+      return pump();
+    })}
+    return pump();
+  }).then(function(blob){
+    var id=hashId(ep.url);
+    return caches.open(EPS).then(function(c){
+      return c.put(offlineUrl(id),new Response(blob,{headers:{"Content-Type":blob.type||"audio/mpeg","Content-Length":String(blob.size)}}));
+    }).then(function(){
+      saved=saved.filter(function(s){return s.url!==ep.url});
+      saved.unshift({id:id,url:ep.url,title:ep.title,show:ep.show,art:ep.art,size:blob.size,at:Date.now()});
+      save("saved",saved);
+    });
+  }).then(function(){delete dl[ep.url];onProgress();paintSaved()})
+  .catch(function(err){
+    delete dl[ep.url];onProgress();
+    if(err&&err.name==="QuotaExceededError")setStatus("Phone storage is full for this app. Delete a saved episode first.");
+    else{corsOk[ep.url]=corsOk[ep.url]||false;setStatus("This show's server doesn't allow saving. Download the file and use Play a file instead.")}
+  });
+}
+function deleteSaved(sv){
+  caches.open(EPS).then(function(c){return c.delete(offlineUrl(sv.id))}).catch(function(){}).then(function(){
+    saved=saved.filter(function(s){return s.id!==sv.id});save("saved",saved);
+    if(state.ep&&state.ep.url===sv.url&&isLocalSrc(curSrc())){var t=pod.currentTime,playing=!pod.paused;pod.src=sv.url;pod.load();
+      pod.addEventListener("loadedmetadata",function f(){pod.removeEventListener("loadedmetadata",f);try{pod.currentTime=t}catch(x){}});if(playing)pod.play().catch(function(){})}
+    paintSaved();
+  });
+}
+function paintSaved(){
+  var l=$("savedList");l.textContent="";
+  var total=0;
+  saved.forEach(function(sv){
+    total+=sv.size||0;
+    var del=document.createElement("button");del.className="mini";del.textContent="Delete";
+    var armed=false;
+    del.addEventListener("click",function(){
+      if(!armed){armed=true;del.textContent="Sure?";setTimeout(function(){armed=false;del.textContent="Delete"},3000);return}
+      deleteSaved(sv);
+    });
+    l.appendChild(row(sv.art,sv.title,sv.show+" · "+mb(sv.size||0),function(){
+      loadEpisode({url:sv.url,title:sv.title,show:sv.show,art:sv.art},true);window.scrollTo({top:0,behavior:"smooth"});
+    },del));
+  });
+  $("savedEmpty").hidden=saved.length>0;
+  $("savedTotal").textContent=saved.length?mb(total)+" on phone":"";
 }
 function msg(t){var r=$("results");r.textContent="";var p=document.createElement("p");p.className="status";p.textContent=t;r.appendChild(p)}
 var lastShows=[];
@@ -636,10 +737,11 @@ function openShow(p){
     eps.forEach(function(x){
       var date=x.releaseDate?new Date(x.releaseDate).toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"}):"";
       var len=x.trackTimeMillis?fmt(x.trackTimeMillis/1000):"";
+      var ep={url:x.episodeUrl,title:x.trackName,show:p.name,art:x.artworkUrl600||x.artworkUrl160||p.art};
       r.appendChild(row(x.artworkUrl160||p.art,x.trackName,[date,len].filter(Boolean).join(" · "),function(){
-        loadEpisode({url:x.episodeUrl,title:x.trackName,show:p.name,art:x.artworkUrl600||x.artworkUrl160||p.art},true);
+        loadEpisode(ep,true);
         window.scrollTo({top:0,behavior:"smooth"});
-      }));
+      },saveButton(ep)));
     });
   }).catch(function(){msg("Episodes did not load. Try again.")});
 }
@@ -653,8 +755,9 @@ $("file").addEventListener("change",function(){
 });
 
 /* ---------- Start ---------- */
-buildZones();paintBeat();paintRecent();
+buildZones();paintBeat();paintRecent();paintSaved();
 if(state.ep)loadEpisode(state.ep,false);else paintEp();
+if("serviceWorker" in navigator){try{navigator.serviceWorker.register("sw.js").catch(function(){})}catch(e){}}
 prepareBeat();
 window.__sb={renderBeat:renderBeat,BEATS:BEATS};
 })();
