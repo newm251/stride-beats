@@ -652,7 +652,7 @@ function bindPod(el){
 bindPod(podA);bindPod(podB);
 $("podVol").value=state.podVol;applyPodVol();
 var podOnly=false;
-function podWanted(){return !state.mix&&state.podVol>0}
+function podWanted(){return state.podVol>0}
 function podPause(){if(!pod.paused){podOnly=true;pod.pause()}}
 function podPlay(){
   userPaused=false;
@@ -664,7 +664,7 @@ $("podVol").addEventListener("input",function(){
   var was=state.podVol;
   state.podVol=+this.value;save("podVol",state.podVol);
   if(state.podVol===0)podPause();  /* 0% means off, even where iPhone can't lower the volume */
-  else if(was===0&&!beatEl.paused&&!state.mix&&pod.src)podPlay();
+  else if(was===0&&!beatEl.paused&&pod.src)podPlay();
   if(!volWorks&&state.podVol<100){primeB();ensureGraph()}
   lockedOut=false;applyPodVol();routeIfNeeded();paintPodNote();
 });
