@@ -919,8 +919,8 @@ $("file").addEventListener("change",function(){
 
 
 /* ---------- Spotify (Web Playback SDK, PKCE sign-in; needs Premium) ---------- */
-var SP_DEFAULT_CLIENT="";
-var SP={client:load("spClient",SP_DEFAULT_CLIENT),tok:load("spTok",null),player:null,device:null,playing:false,track:null,sdk:false};
+var SP_DEFAULT_CLIENT="8f44b0cf454646069298bf3475ad1983";
+var SP={client:load("spClient","")||SP_DEFAULT_CLIENT,tok:load("spTok",null),player:null,device:null,playing:false,track:null,sdk:false};
 var SP_REDIRECT=location.origin+location.pathname.replace(/index\.html$/,"");
 var SP_SCOPES="streaming user-read-email user-read-private user-modify-playback-state user-read-playback-state playlist-read-private";
 function spNote(t){$("spNote").textContent=t||""}
