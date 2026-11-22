@@ -93,6 +93,9 @@ input[type=range]{width:100%;accent-color:var(--accent);height:28px;margin:0}
 .beat .n{font-weight:600}
 .beat .b{font:700 15px var(--font-num);color:var(--zc)}
 .beat .d{font-size:12.5px;color:var(--muted);line-height:1.35}
+.beat .pc{font-size:12px;color:var(--ink);font-weight:500}
+.paceIn{width:88px;height:44px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--ink);text-align:center;font-size:16px}
+.paceIn.bad{border-color:var(--z-speed)}
 .beat[aria-pressed=true]{border-color:var(--zc);box-shadow:inset 0 0 0 1px var(--zc)}
 
 /* Search */
@@ -152,6 +155,12 @@ form.search button{height:46px;padding:0 16px;border-radius:10px;background:var(
       </div>
     </div>
     <p class="status" id="cadHelp">Open a recent easy run in Strava, Garmin or Apple Fitness and set this to its average cadence. Not sure? 160 is a common starting point.</p>
+    <div class="row">
+      <label class="label" for="easyPace" style="flex:1">Pace on that run</label>
+      <input id="easyPace" class="paceIn num" type="text" inputmode="numeric" placeholder="6:30" autocomplete="off" aria-label="Easy run pace, minutes and seconds">
+      <button class="ctl" id="unit" aria-label="Switch between kilometres and miles">/km</button>
+    </div>
+    <p class="status" id="paceHelp">Add it to see an estimated pace for every beat.</p>
   </section>
 
   <section class="card" aria-label="Podcast">
@@ -185,6 +194,7 @@ form.search button{height:46px;padding:0 16px;border-radius:10px;background:var(
       <div style="display:flex;flex-direction:column;gap:6px;min-width:0">
         <span class="beatname" id="bName">Beat</span>
         <span class="zonetag" id="bZone"><span class="dot"></span><span></span></span>
+        <span class="zonetag num" id="bPace" hidden></span>
         <div class="bpm"><span class="big num" id="bBpm">138</span><span class="unit">steps / min</span></div>
       </div>
       <div class="steps">
@@ -313,6 +323,8 @@ var state = {
   beatId: load("beat","steady"),
   bpmOver: load("bpmOver",{}),
   cad: load("cad",null),
+  easyPace: load("easyPace",null),
+  unit: load("unit","km"),
   vol: load("vol",45),
   beatOn: load("beatOn",true),
   rate: load("rate",1),
@@ -427,7 +439,7 @@ function buildZones(){
     var g=document.createElement("div");g.className="beats";
     BEATS.filter(function(b){return b.zone===z}).forEach(function(b){
       var el=document.createElement("button");el.className="beat";el.dataset.id=b.id;
-      el.innerHTML='<span class="top"><span class="n"></span><span class="b num"></span></span><span class="d"></span>';
+      el.innerHTML='<span class="top"><span class="n"></span><span class="b num"></span></span><span class="pc num" hidden></span><span class="d"></span>';
       el.querySelector(".n").textContent=b.name;
       el.querySelector(".b").textContent=b.bpm;
       el.querySelector(".d").textContent=b.d;
@@ -442,9 +454,11 @@ function paintBeat(){
   document.querySelectorAll(".beat").forEach(function(el){
     el.setAttribute("aria-pressed",el.dataset.id===b.id?"true":"false");
     var bb=beatById(el.dataset.id);el.querySelector(".b").textContent=bpmFor(bb);
+    var pc=el.querySelector(".pc"),pv=paceAt(bpmFor(bb));pc.hidden=!pv;pc.textContent=pv?"about "+pv:"";
   });
   $("bName").textContent=b.name;
   var zt=$("bZone");zt.style.setProperty("--zc","var(--z-"+b.zone+")");zt.lastChild.textContent=ZONES[b.zone].label;
+  var bp=$("bPace"),pv=paceAt(curBpm());bp.hidden=!pv;bp.textContent=pv?"About "+pv+" at this tempo":"";
   $("bBpm").textContent=bpm;$("bpmSlider").value=bpm;
   $("bpmReset").hidden=!state.bpmOver[b.id];
   paintCad();
@@ -460,7 +474,32 @@ function setBpm(v){
   save("bpmOver",state.bpmOver);paintBeat();
   clearTimeout(bpmTimer);bpmTimer=setTimeout(prepareBeat,250);
 }
+/* Estimated pace at a tempo, from the runner's own easy run. Speed is taken to rise with
+   cadence to the power 2.5: stride lengthens a little as cadence rises, as it does for most runners. */
+var PACE_EXP=2.5;
+function fmtPace(sec){sec=Math.round(sec);return Math.floor(sec/60)+":"+(sec%60<10?"0":"")+sec%60+" /"+state.unit}
+function paceAt(bpm){if(!state.easyPace)return null;return fmtPace(state.easyPace/Math.pow(bpm/cad(),PACE_EXP))}
+function parsePace(t){var m=/^\s*(\d{1,2})\s*[:.,\s]\s*(\d{1,2})\s*$/.exec(t)||/^\s*(\d{1,2})(\d{2})\s*$/.exec(t);
+  if(!m)return null;var mm=+m[1],ss=+m[2];if(ss>59)return null;var v=mm*60+ss;return v>=150&&v<=1500?v:null}
+function paintPaceIn(){
+  var el=$("easyPace");if(document.activeElement!==el)el.classList.remove("bad");if(document.activeElement!==el)el.value=state.easyPace?fmtPace(state.easyPace).split(" ")[0]:"";
+  $("unit").textContent="/"+state.unit;
+  $("paceHelp").textContent=state.easyPace?"Paces are estimates. Hills, trails and fatigue change them.":"Add it to see an estimated pace for every beat.";
+}
+$("easyPace").addEventListener("change",function(){
+  var t=this.value.trim();
+  if(!t){state.easyPace=null;save("easyPace",null);this.classList.remove("bad");paintBeat();return}
+  var v=parsePace(t);this.classList.toggle("bad",!v);
+  if(v){state.easyPace=v;save("easyPace",v);paintBeat()}
+});
+$("easyPace").addEventListener("blur",paintPaceIn);
+$("unit").addEventListener("click",function(){
+  var toMi=state.unit==="km";state.unit=toMi?"mi":"km";save("unit",state.unit);
+  if(state.easyPace){state.easyPace=Math.round(state.easyPace*(toMi?1.609344:1/1.609344));save("easyPace",state.easyPace)}
+  paintBeat();
+});
 function paintCad(){
+  paintPaceIn();
   $("cadVal").textContent=cad();
   $("cadCard").classList.toggle("unset",!state.cad);
 }
