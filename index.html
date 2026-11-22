@@ -196,7 +196,10 @@ form.search button{height:46px;padding:0 16px;border-radius:10px;background:var(
   <section class="card" aria-label="Saved for offline">
     <div class="row" style="justify-content:space-between"><span class="label">Saved for offline</span><span class="label num" id="savedTotal"></span></div>
     <div class="list" id="savedList"></div>
-    <button class="toggle" id="autoNext" aria-pressed="true" hidden>Play in a row</button>
+    <div class="row">
+      <button class="toggle" id="autoNext" aria-pressed="true" hidden>Play in a row</button>
+      <button class="toggle" id="autoDel" aria-pressed="true" hidden>Delete when finished</button>
+    </div>
     <p class="status" id="savedEmpty">Tap Save next to any episode to keep it on this phone for runs without signal. Keep the app open until it finishes.</p>
   </section>
 
@@ -299,6 +302,7 @@ var state = {
   rate: load("rate",1),
   podVol: load("podVol",100),
   autoNext: load("autoNext",true),
+  autoDel: load("autoDel",true),
   recent: load("recent",[]),
   ep: load("ep",null)
 };
@@ -542,9 +546,10 @@ function bindPod(el){
   el.addEventListener("ended",function(){
     if(el!==pod||!state.ep)return;
     save("pos:"+state.ep.url,0);
-    var nx=nextSaved();
+    var fin=savedFor(state.ep.url),nx=nextSaved();
     if(state.autoNext&&nx){loadEpisode({url:nx.url,title:nx.title,show:nx.show,art:nx.art},true)}
     else paintBar();
+    if(fin&&state.autoDel)deleteSaved(fin,true);
   });
   el.addEventListener("error",function(){
     if(el!==pod||!state.ep)return;
@@ -697,10 +702,10 @@ function saveEpisode(ep,onProgress){
     else{corsOk[ep.url]=corsOk[ep.url]||false;setStatus("This show's server doesn't allow saving. Download the file and use Play a file instead.")}
   });
 }
-function deleteSaved(sv){
+function deleteSaved(sv,quiet){
   caches.open(EPS).then(function(c){return c.delete(offlineUrl(sv.id))}).catch(function(){}).then(function(){
     saved=saved.filter(function(s){return s.id!==sv.id});save("saved",saved);
-    if(state.ep&&state.ep.url===sv.url&&isLocalSrc(curSrc())){var t=pod.currentTime,playing=!pod.paused;pod.src=sv.url;pod.load();
+    if(!quiet&&state.ep&&state.ep.url===sv.url&&isLocalSrc(curSrc())){var t=pod.currentTime,playing=!pod.paused;pod.src=sv.url;pod.load();
       pod.addEventListener("loadedmetadata",function f(){pod.removeEventListener("loadedmetadata",f);try{pod.currentTime=t}catch(x){}});if(playing)pod.play().catch(function(){})}
     paintSaved();
   });
@@ -711,6 +716,7 @@ function nextSaved(){ /* the saved episode after the current one, or the first o
   for(var k=0;k<saved.length;k++)if(saved[k].url===cur)i=k;
   var n=saved[i+1]||null;return n&&n.url!==cur?n:null;
 }
+$("autoDel").addEventListener("click",function(){state.autoDel=!state.autoDel;save("autoDel",state.autoDel);paintSaved()});
 $("autoNext").addEventListener("click",function(){state.autoNext=!state.autoNext;save("autoNext",state.autoNext);paintSaved()});
 function paintSaved(){
   var l=$("savedList");l.textContent="";
@@ -737,6 +743,8 @@ function paintSaved(){
   $("savedEmpty").hidden=saved.length>0;
   var an=$("autoNext");an.hidden=saved.length<2;an.setAttribute("aria-pressed",state.autoNext?"true":"false");
   an.textContent=state.autoNext?"Plays the next saved episode when one ends":"Stops after each episode";
+  var ad=$("autoDel");ad.hidden=!saved.length;ad.setAttribute("aria-pressed",state.autoDel?"true":"false");
+  ad.textContent=state.autoDel?"Deletes episodes after they finish":"Keeps episodes after they finish";
   $("savedTotal").textContent=saved.length?mb(total)+" on phone":"";
 }
 function msg(t){var r=$("results");r.textContent="";var p=document.createElement("p");p.className="status";p.textContent=t;r.appendChild(p)}
