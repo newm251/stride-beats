@@ -714,7 +714,7 @@ function isPlaying(){return (pod.src&&!pod.paused)||!beatEl.paused||(state.sourc
 function playAll(){
   userPaused=false;
   if(!volWorks&&state.podVol<100){primeB();ensureGraph()}
-  if(state.source==="spotify"&&SP&&SP.player){spResume()}
+  if(state.source==="spotify"&&SP&&SP.tok&&SP.track){spResume()}
   else if(pod.src&&podWanted())pod.play().catch(function(){setStatus("Tap play again to start the episode.")});
   if(state.beatOn){if(beatUrl)beatEl.play().catch(function(){});else wantPlay=true}
   wakeOn();paintBar();
@@ -959,13 +959,24 @@ function spSignOut(msg){
 }
 function spLoadSdk(){
   if(SP.sdk||!SP.tok)return;SP.sdk=true;
-  window.onSpotifyWebPlaybackSDKReady=spInitPlayer;
+  window.onSpotifyWebPlaybackSDKReady=function(){SP.sdkReady=true;spNote("Spotify ready. Pick a playlist.")};
   var sc=document.createElement("script");sc.src="https://sdk.scdn.co/spotify-player.js";
   sc.onerror=function(){SP.sdk=false;spNote("Spotify didn't load. Check your connection.")};document.head.appendChild(sc);
 }
+var spWaiters=[];
+function spEnsurePlayer(){ /* call from a tap: Safari only lets Spotify's audio start if the player is made in one */
+  if(SP.player){spActivate();return true}
+  if(!window.Spotify||!SP.sdkReady){spNote("Spotify is still loading. Try again in a few seconds.");return false}
+  spInitPlayer();spActivate();return true;
+}
+function spWaitDevice(ms){
+  if(SP.device)return Promise.resolve(SP.device);
+  return new Promise(function(res,rej){var t=setTimeout(function(){rej(new Error("Spotify player didn't start"))},ms);spWaiters.push(function(d){clearTimeout(t);res(d)})});
+}
 function spInitPlayer(){
   var pl=new Spotify.Player({name:"Stride Beats",getOAuthToken:function(cb){spToken().then(cb).catch(function(){})},volume:.9});
-  pl.addListener("ready",function(d){SP.device=d.device_id;spNote("")});
+  pl.addListener("ready",function(d){SP.device=d.device_id;spNote("Spotify player connected.");var w=spWaiters;spWaiters=[];w.forEach(function(f){f(d.device_id)})});
+  pl.addListener("autoplay_failed",function(){SP.needTap=true;spNote("iPhone blocked the music from starting. Tap Play on this card once more.")});
   pl.addListener("not_ready",function(){SP.device=null});
   pl.addListener("initialization_error",function(e){spNote("This browser can't play Spotify: "+e.message)});
   pl.addListener("authentication_error",function(){spSignOut("Spotify sign-in expired. Connect again.")});
@@ -973,24 +984,24 @@ function spInitPlayer(){
   pl.addListener("playback_error",function(e){spNote("Spotify playback error: "+e.message)});
   pl.addListener("player_state_changed",function(st){
     if(!st){SP.playing=false;paintSpotify();paintBar();return}
-    SP.playing=!st.paused;SP.track=st.track_window&&st.track_window.current_track;
+    SP.playing=!st.paused;if(SP.playing){SP.needTap=false;if(/blocked|Starting|connected/.test($("spNote").textContent))spNote("")}SP.track=st.track_window&&st.track_window.current_track;
     if(SP.playing&&state.source==="spotify"&&state.beatOn&&beatUrl&&beatEl.paused&&!userPaused)beatEl.play().catch(function(){});
     paintSpotify();paintBar();
   });
-  pl.connect();SP.player=pl;spNote("Connecting to Spotify…");
+  pl.connect();SP.player=pl;
 }
 function spActivate(){try{if(SP.player&&SP.player.activateElement)SP.player.activateElement()}catch(e){}}
 function spPauseMusic(){if(SP&&SP.player&&SP.playing){try{SP.player.pause()}catch(e){}}}
-function spResume(){if(!SP.player)return;spActivate();SP.player.resume().catch(function(){})}
+function spResume(){if(!spEnsurePlayer())return;SP.player.resume().catch(function(){})}
 function spPlayContext(uri,name){
-  if(!SP.device){spNote("Spotify is still connecting. Try again in a few seconds.");return}
-  spActivate();
+  if(!spEnsurePlayer())return;
   if(pod.src&&!pod.paused){podOnly=true;pod.pause()}
   state.source="spotify";save("source","spotify");userPaused=false;
   if(state.beatOn&&beatUrl)beatEl.play().catch(function(){});
   wakeOn();
   var go=function(){return spApi("/me/player/play?device_id="+encodeURIComponent(SP.device),{method:"PUT",body:{context_uri:uri}})};
-  go().catch(function(e){
+  if(!SP.device)spNote("Starting Spotify player…");
+  spWaitDevice(10000).then(go).catch(function(e){
     if(e.status===404)return spApi("/me/player",{method:"PUT",body:{device_ids:[SP.device],play:false}}).then(go);
     throw e;
   }).then(function(){spNote("Playing "+name)}).catch(function(e){spNote("Spotify wouldn't play that: "+e.message)});
@@ -1029,10 +1040,17 @@ $("spConnect").addEventListener("click",spLogin);
 $("spOut").addEventListener("click",function(){spSignOut("Disconnected.")});
 $("spMine").addEventListener("click",spMine);
 $("spBpm").addEventListener("click",spBpm);
-$("spPrev").addEventListener("click",function(){if(SP.player){spActivate();SP.player.previousTrack()}});
-$("spNext").addEventListener("click",function(){if(SP.player){spActivate();SP.player.nextTrack()}});
-$("spToggle").addEventListener("click",function(){if(!SP.player)return;spActivate();
-  if(SP.playing)SP.player.pause();else{state.source="spotify";save("source","spotify");if(pod.src&&!pod.paused){podOnly=true;pod.pause()}SP.player.resume()}});
+$("spPrev").addEventListener("click",function(){if(spEnsurePlayer())SP.player.previousTrack()});
+$("spNext").addEventListener("click",function(){if(spEnsurePlayer())SP.player.nextTrack()});
+$("spToggle").addEventListener("click",function(){
+  if(!spEnsurePlayer())return;
+  if(!SP.track){spNote("Pick a playlist first.");return}
+  if(SP.playing&&!SP.needTap){SP.player.pause();return}
+  SP.needTap=false;state.source="spotify";save("source","spotify");
+  if(pod.src&&!pod.paused){podOnly=true;pod.pause()}
+  if(state.beatOn&&beatUrl&&beatEl.paused)beatEl.play().catch(function(){});
+  SP.player.resume().then(function(){spNote("")}).catch(function(){});
+});
 (function spBoot(){
   var q=new URLSearchParams(location.search),code=q.get("code"),err=q.get("error");
   if(code||err){history.replaceState(null,"",SP_REDIRECT)}
