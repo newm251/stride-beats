@@ -212,6 +212,7 @@ form.search button{height:46px;padding:0 16px;border-radius:10px;background:var(
     </div>
     <div class="row">
       <button class="toggle" id="beatOn" aria-pressed="true">Beat on</button>
+      <button class="toggle" id="mix" aria-pressed="false">Mix with other apps</button>
       <span class="status" id="status"></span>
     </div>
   </section>
@@ -331,6 +332,7 @@ var state = {
   podVol: load("podVol",100),
   autoNext: load("autoNext",true),
   autoDel: load("autoDel",true),
+  mix: load("mix",false),
   recent: load("recent",[]),
   ep: load("ep",null)
 };
@@ -529,7 +531,21 @@ var isIOS=/iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==="M
 var volWorks=!isIOS&&(function(){try{var a=document.createElement("audio");a.volume=.5;return Math.abs(a.volume-.5)<.01}catch(e){return false}})();
 var actx=null,podGain=null,primed=false,corsOk={},userPaused=true,lockedOut=false;
 /* Ask iOS 16.4+ to treat page audio as media playback (keeps going on lock and with the silent switch on). */
-try{if(navigator.audioSession)navigator.audioSession.type="playback"}catch(e){}
+/* "playback" keeps going on lock but stops other apps; "ambient" mixes with Audible, Spotify or Apple Podcasts. */
+function applySession(){try{if(navigator.audioSession)navigator.audioSession.type=state.mix?"ambient":"playback"}catch(e){}}
+applySession();
+function paintMix(){
+  var b=$("mix");b.setAttribute("aria-pressed",state.mix?"true":"false");
+  b.textContent=state.mix?"Mixing with other apps":"Mix with other apps";
+  if(state.mix)setStatus(navigator.audioSession?"Start Audible first, then press play here. Turn off silent mode.":"This phone's browser can't mix with other apps. It needs iOS 16.4 or later.");
+}
+$("mix").addEventListener("click",function(){
+  state.mix=!state.mix;save("mix",state.mix);
+  var was=!beatEl.paused;if(was){beatEl.pause();podA.pause();podB.pause()}
+  applySession();paintMix();if(!state.mix)setStatus("");
+  if(was)playAll();
+});
+paintMix();
 function rescue(){ /* iOS stopped the mixer: keep the podcast going on the plain player at full volume */
   if(pod!==podB||!state.ep||userPaused)return;
   lockedOut=true;moveTo(podA,curSrc(),true);paintPodNote();
