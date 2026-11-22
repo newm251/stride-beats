@@ -109,6 +109,7 @@ form.search button{height:46px;padding:0 16px;border-radius:10px;background:var(
 .item .s{font-size:12.5px;color:var(--muted)}
 .item .m{min-width:0;display:flex;flex-direction:column;gap:2px}
 .chips{display:flex;gap:8px;flex-wrap:wrap}
+.col{display:flex;flex-direction:column;gap:12px}
 .chip{height:34px;padding:0 12px;border-radius:17px;border:1px solid var(--line);font-size:13px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .filepick{font-size:13px;color:var(--muted)}
 .filepick label{color:var(--accent);font-weight:600;cursor:pointer}
@@ -218,6 +219,34 @@ form.search button{height:46px;padding:0 16px;border-radius:10px;background:var(
   </section>
 
   <section id="zones" style="display:flex;flex-direction:column;gap:20px" aria-label="Beats by training zone"></section>
+
+  <section class="card" aria-label="Spotify music" id="spCard">
+    <div class="row" style="justify-content:space-between"><span class="label">Spotify music</span><button class="label" id="spOut" style="color:var(--accent)" hidden>Disconnect</button></div>
+    <div id="spSetup" class="col">
+      <p class="status">Needs Spotify Premium and a free Spotify developer app. Paste its Client ID here.</p>
+      <form class="search" id="spIdForm"><input id="spId" type="text" placeholder="Client ID" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Spotify Client ID"><button type="submit">Save</button></form>
+    </div>
+    <div id="spLogin" class="col" hidden>
+      <button class="toggle" id="spConnect" style="align-self:flex-start;background:var(--accent);color:var(--accent-ink);border-color:var(--accent)">Connect Spotify</button>
+    </div>
+    <div id="spMain" class="col" hidden>
+      <div class="ep">
+        <img id="spArt" alt="" hidden><div class="ph" id="spPh"></div>
+        <div class="meta"><span class="show" id="spArtist">Nothing playing</span><span class="title" id="spTrack">Pick a playlist below.</span></div>
+      </div>
+      <div class="row">
+        <button class="ctl" id="spPrev" aria-label="Previous song">⏮</button>
+        <button class="ctl" id="spToggle" aria-label="Play or pause the music only">Play</button>
+        <button class="ctl" id="spNext" aria-label="Next song">⏭</button>
+      </div>
+      <div class="chips">
+        <button class="chip" id="spMine">Your playlists</button>
+        <button class="chip" id="spBpm">Running playlists at 138 bpm</button>
+      </div>
+      <div class="list" id="spList"></div>
+    </div>
+    <span class="status" id="spNote"></span>
+  </section>
 
   <section class="card" aria-label="Saved for offline">
     <div class="row" style="justify-content:space-between"><span class="label">Saved for offline</span><span class="label num" id="savedTotal"></span></div>
@@ -332,6 +361,7 @@ var state = {
   podVol: load("podVol",100),
   autoNext: load("autoNext",true),
   autoDel: load("autoDel",true),
+  source: load("source","podcast"),
   recent: load("recent",[]),
   ep: load("ep",null)
 };
@@ -584,6 +614,7 @@ function paintPodNote(){
 }
 function loadEpisode(e,autoplay){
   state.ep=e;
+  if(autoplay&&state.source!=="podcast"){state.source="podcast";save("source","podcast");spPauseMusic()}
   if(!e.local)save("ep",e);
   var el=(!volWorks&&podGain&&state.podVol<100&&routable(e))?podB:podA;
   if(pod!==el){var o=pod;pod=el;o.pause()}
@@ -679,15 +710,16 @@ document.addEventListener("visibilitychange",function(){
     setTimeout(function(){if(pod===podB&&!userPaused&&(podB.paused||actx.state!=="running"||podB.currentTime-t0<.5))rescue()},1500);
   }
 });
-function isPlaying(){return (pod.src&&!pod.paused)||!beatEl.paused}
+function isPlaying(){return (pod.src&&!pod.paused)||!beatEl.paused||(state.source==="spotify"&&!!SP&&SP.playing)}
 function playAll(){
   userPaused=false;
   if(!volWorks&&state.podVol<100){primeB();ensureGraph()}
-  if(pod.src&&podWanted())pod.play().catch(function(){setStatus("Tap play again to start the episode.")});
+  if(state.source==="spotify"&&SP&&SP.player){spResume()}
+  else if(pod.src&&podWanted())pod.play().catch(function(){setStatus("Tap play again to start the episode.")});
   if(state.beatOn){if(beatUrl)beatEl.play().catch(function(){});else wantPlay=true}
   wakeOn();paintBar();
 }
-function pauseAll(){userPaused=true;podA.pause();podB.pause();beatEl.pause();wantPlay=false;wakeOff();paintBar()}
+function pauseAll(){userPaused=true;spPauseMusic();podA.pause();podB.pause();beatEl.pause();wantPlay=false;wakeOff();paintBar()}
 $("playAll").addEventListener("click",function(){isPlaying()?pauseAll():playAll()});
 beatEl.addEventListener("play",paintBar);beatEl.addEventListener("pause",paintBar);
 function paintBar(){
@@ -695,8 +727,11 @@ function paintBar(){
   var b=curBeat();
   var podOn=pod.src&&!pod.paused;
   $("podPlay").textContent=podOn?"Pause":"Play";
+  var bt=state.beatOn?b.name+" · "+curBpm()+" spm":"Beat off";
+  if(SP)$("spBpm").textContent="Running playlists at "+curBpm()+" bpm";
+  if(state.source==="spotify"&&SP&&SP.track){$("barL1").textContent=SP.track.name;$("barL2").textContent=bt+" · "+SP.track.artists.map(function(a){return a.name}).join(", ");return}
   $("barL1").textContent=podOn?state.ep.title:(p?"Running to the beat":(state.ep?state.ep.title:"Ready"));
-  $("barL2").textContent=(state.beatOn?b.name+" · "+curBpm()+" spm":"Beat off")+(podOn?" · "+state.ep.show:"");
+  $("barL2").textContent=bt+(podOn?" · "+state.ep.show:"");
 }
 
 /* ---------- Beat controls ---------- */
@@ -881,6 +916,134 @@ $("file").addEventListener("change",function(){
   var f=this.files&&this.files[0];if(!f)return;
   loadEpisode({url:URL.createObjectURL(f),title:f.name.replace(/\.[^.]+$/,""),show:"File on this phone",art:"",local:true},true);
 });
+
+
+/* ---------- Spotify (Web Playback SDK, PKCE sign-in; needs Premium) ---------- */
+var SP_DEFAULT_CLIENT="";
+var SP={client:load("spClient",SP_DEFAULT_CLIENT),tok:load("spTok",null),player:null,device:null,playing:false,track:null,sdk:false};
+var SP_REDIRECT=location.origin+location.pathname.replace(/index\.html$/,"");
+var SP_SCOPES="streaming user-read-email user-read-private user-modify-playback-state user-read-playback-state playlist-read-private";
+function spNote(t){$("spNote").textContent=t||""}
+function b64url(buf){var b=new Uint8Array(buf),s="";for(var i=0;i<b.length;i++)s+=String.fromCharCode(b[i]);return btoa(s).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"")}
+function spLogin(){
+  var a=new Uint8Array(48);crypto.getRandomValues(a);var ver=b64url(a);save("spVer",ver);
+  crypto.subtle.digest("SHA-256",new TextEncoder().encode(ver)).then(function(h){
+    location.href="https://accounts.spotify.com/authorize?"+new URLSearchParams({client_id:SP.client,response_type:"code",redirect_uri:SP_REDIRECT,
+      code_challenge_method:"S256",code_challenge:b64url(h),scope:SP_SCOPES}).toString();
+  });
+}
+function spTokenReq(body){
+  return fetch("https://accounts.spotify.com/api/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams(body).toString()})
+    .then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.error_description||j.error||"token");return j})})
+    .then(function(j){SP.tok={access:j.access_token,refresh:j.refresh_token||(SP.tok&&SP.tok.refresh),exp:Date.now()+(j.expires_in||3600)*1000};save("spTok",SP.tok);return SP.tok.access});
+}
+function spToken(){
+  if(!SP.tok)return Promise.reject(new Error("signed out"));
+  if(SP.tok.exp-Date.now()>60000)return Promise.resolve(SP.tok.access);
+  return spTokenReq({grant_type:"refresh_token",refresh_token:SP.tok.refresh,client_id:SP.client}).catch(function(e){spSignOut("Spotify signed you out. Connect again.");throw e});
+}
+function spApi(path,opt){
+  opt=opt||{};
+  return spToken().then(function(t){
+    return fetch("https://api.spotify.com/v1"+path,{method:opt.method||"GET",headers:{"Authorization":"Bearer "+t,"Content-Type":"application/json"},body:opt.body?JSON.stringify(opt.body):undefined});
+  }).then(function(r){
+    if(r.status===204||r.status===202)return null;
+    return r.json().catch(function(){return null}).then(function(j){if(!r.ok){var e=new Error((j&&j.error&&j.error.message)||("HTTP "+r.status));e.status=r.status;throw e}return j});
+  });
+}
+function spSignOut(msg){
+  SP.tok=null;save("spTok",null);SP.playing=false;SP.track=null;SP.device=null;
+  try{if(SP.player)SP.player.disconnect()}catch(e){}SP.player=null;
+  if(state.source==="spotify"){state.source="podcast";save("source","podcast")}
+  paintSpotify();paintBar();spNote(msg||"");
+}
+function spLoadSdk(){
+  if(SP.sdk||!SP.tok)return;SP.sdk=true;
+  window.onSpotifyWebPlaybackSDKReady=spInitPlayer;
+  var sc=document.createElement("script");sc.src="https://sdk.scdn.co/spotify-player.js";
+  sc.onerror=function(){SP.sdk=false;spNote("Spotify didn't load. Check your connection.")};document.head.appendChild(sc);
+}
+function spInitPlayer(){
+  var pl=new Spotify.Player({name:"Stride Beats",getOAuthToken:function(cb){spToken().then(cb).catch(function(){})},volume:.9});
+  pl.addListener("ready",function(d){SP.device=d.device_id;spNote("")});
+  pl.addListener("not_ready",function(){SP.device=null});
+  pl.addListener("initialization_error",function(e){spNote("This browser can't play Spotify: "+e.message)});
+  pl.addListener("authentication_error",function(){spSignOut("Spotify sign-in expired. Connect again.")});
+  pl.addListener("account_error",function(){spNote("Spotify needs a full Premium account for this. Mobile-only Premium doesn't work.")});
+  pl.addListener("playback_error",function(e){spNote("Spotify playback error: "+e.message)});
+  pl.addListener("player_state_changed",function(st){
+    if(!st){SP.playing=false;paintSpotify();paintBar();return}
+    SP.playing=!st.paused;SP.track=st.track_window&&st.track_window.current_track;
+    if(SP.playing&&state.source==="spotify"&&state.beatOn&&beatUrl&&beatEl.paused&&!userPaused)beatEl.play().catch(function(){});
+    paintSpotify();paintBar();
+  });
+  pl.connect();SP.player=pl;spNote("Connecting to Spotify…");
+}
+function spActivate(){try{if(SP.player&&SP.player.activateElement)SP.player.activateElement()}catch(e){}}
+function spPauseMusic(){if(SP&&SP.player&&SP.playing){try{SP.player.pause()}catch(e){}}}
+function spResume(){if(!SP.player)return;spActivate();SP.player.resume().catch(function(){})}
+function spPlayContext(uri,name){
+  if(!SP.device){spNote("Spotify is still connecting. Try again in a few seconds.");return}
+  spActivate();
+  if(pod.src&&!pod.paused){podOnly=true;pod.pause()}
+  state.source="spotify";save("source","spotify");userPaused=false;
+  if(state.beatOn&&beatUrl)beatEl.play().catch(function(){});
+  wakeOn();
+  var go=function(){return spApi("/me/player/play?device_id="+encodeURIComponent(SP.device),{method:"PUT",body:{context_uri:uri}})};
+  go().catch(function(e){
+    if(e.status===404)return spApi("/me/player",{method:"PUT",body:{device_ids:[SP.device],play:false}}).then(go);
+    throw e;
+  }).then(function(){spNote("Playing "+name)}).catch(function(e){spNote("Spotify wouldn't play that: "+e.message)});
+  paintBar();
+}
+function spShowLists(items,empty){
+  var l=$("spList");l.textContent="";
+  items=items.filter(Boolean);
+  if(!items.length){spNote(empty);return}
+  spNote("");
+  items.forEach(function(pl){
+    var img=pl.images&&pl.images.length?pl.images[pl.images.length>1?1:0].url:"";
+    l.appendChild(row(img,pl.name,pl.owner&&pl.owner.display_name?"By "+pl.owner.display_name:"Playlist",function(){spPlayContext(pl.uri,pl.name)}));
+  });
+}
+function spMine(){spNote("Loading your playlists…");spApi("/me/playlists?limit=30").then(function(j){spShowLists((j&&j.items)||[],"You have no playlists yet.")}).catch(function(e){spNote("Couldn't load playlists: "+e.message)})}
+function spBpm(){
+  var q=curBpm()+" bpm running";spNote("Searching “"+q+"”…");
+  spApi("/search?type=playlist&limit=10&q="+encodeURIComponent(q)).then(function(j){spShowLists((j&&j.playlists&&j.playlists.items)||[],"No playlists found for that tempo.")})
+    .catch(function(e){spNote("Search failed: "+e.message)});
+}
+function paintSpotify(){
+  var hasId=!!SP.client,signed=!!SP.tok;
+  $("spSetup").hidden=hasId;$("spLogin").hidden=!hasId||signed;$("spMain").hidden=!signed;$("spOut").hidden=!signed;
+  $("spBpm").textContent="Running playlists at "+curBpm()+" bpm";
+  var t=SP.track;
+  $("spTrack").textContent=t?t.name:"Pick a playlist below.";
+  $("spArtist").textContent=t?t.artists.map(function(a){return a.name}).join(", "):"Nothing playing";
+  var art=t&&t.album&&t.album.images&&t.album.images.length?t.album.images[0].url:"";
+  if(art){$("spArt").src=art;$("spArt").hidden=false;$("spPh").hidden=true}else{$("spArt").hidden=true;$("spPh").hidden=false}
+  $("spToggle").textContent=SP.playing?"Pause":"Play";
+}
+$("spIdForm").addEventListener("submit",function(ev){ev.preventDefault();var v=$("spId").value.trim();if(!/^[0-9a-f]{32}$/i.test(v)){spNote("That doesn't look like a Client ID. It's 32 letters and numbers.");return}
+  SP.client=v;save("spClient",v);spNote("");paintSpotify()});
+$("spConnect").addEventListener("click",spLogin);
+$("spOut").addEventListener("click",function(){spSignOut("Disconnected.")});
+$("spMine").addEventListener("click",spMine);
+$("spBpm").addEventListener("click",spBpm);
+$("spPrev").addEventListener("click",function(){if(SP.player){spActivate();SP.player.previousTrack()}});
+$("spNext").addEventListener("click",function(){if(SP.player){spActivate();SP.player.nextTrack()}});
+$("spToggle").addEventListener("click",function(){if(!SP.player)return;spActivate();
+  if(SP.playing)SP.player.pause();else{state.source="spotify";save("source","spotify");if(pod.src&&!pod.paused){podOnly=true;pod.pause()}SP.player.resume()}});
+(function spBoot(){
+  var q=new URLSearchParams(location.search),code=q.get("code"),err=q.get("error");
+  if(code||err){history.replaceState(null,"",SP_REDIRECT)}
+  if(err){spNote(err==="access_denied"?"Spotify connection cancelled.":"Spotify said: "+err)}
+  if(code&&SP.client){
+    spNote("Finishing Spotify sign-in…");
+    spTokenReq({grant_type:"authorization_code",code:code,redirect_uri:SP_REDIRECT,client_id:SP.client,code_verifier:load("spVer","")})
+      .then(function(){spNote("");paintSpotify();spLoadSdk()}).catch(function(e){spNote("Spotify sign-in failed: "+e.message)});
+  }else if(SP.tok)spLoadSdk();
+  paintSpotify();
+})();
 
 /* ---------- Start ---------- */
 buildZones();paintBeat();paintRecent();paintSaved();
